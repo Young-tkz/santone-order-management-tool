@@ -1,0 +1,294 @@
+// app/(admin)/admin/settings/page.jsx
+import { redirect } from 'next/navigation'
+import { supabase } from '@/lib/supabaseClient'
+import SaveAllButton from '@/components/SaveAllButton' // client component (we'll add this file)
+
+/**
+ * Server action: update only business info fields
+ * Called by the Business Info form.
+ */
+async function updateBusinessInfo(formData) {
+    'use server'
+    const data = Object.fromEntries(formData)
+    const business_name = data.business_name ?? null
+    const business_phone = data.business_phone ?? null
+
+    // read existing settings
+    const { data: existing, error: fetchError } = await supabase
+        .from('settings')
+        .select('*')
+        .limit(1)
+        .single()
+
+    if (fetchError && fetchError.code !== 'PGRST116') {
+        console.error('Error reading settings:', fetchError)
+    }
+
+    const payload = {
+        // only update business fields
+        ...(business_name !== undefined ? { business_name } : {}),
+        ...(business_phone !== undefined ? { business_phone } : {}),
+        updated_at: new Date().toISOString()
+    }
+
+    if (existing && existing.id) {
+        const { error } = await supabase.from('settings').update(payload).eq('id', existing.id)
+        if (error) {
+            console.error('Failed to update business info:', error)
+            return redirect('/admin/settings?updated=0')
+        }
+    } else {
+        // create with defaults for missing fields (keep other values null/0 unless you want defaults)
+        const row = {
+            business_name,
+            business_phone,
+            // keep other fields null/undefined so they don't get set to 0 here
+            updated_at: new Date().toISOString()
+        }
+        const { error } = await supabase.from('settings').insert(row)
+        if (error) {
+            console.error('Failed to create settings row (business):', error)
+            return redirect('/admin/settings?updated=0')
+        }
+    }
+
+    return redirect('/admin/settings?updated=1')
+}
+
+/**
+ * Server action: update only delivery & rate fields
+ * Called by the Delivery & Currency form.
+ */
+async function updateDeliveryRates(formData) {
+    'use server'
+    const data = Object.fromEntries(formData)
+
+    // Only parse numeric fields if provided (and not empty)
+    const parseNumberIfPresent = (key) => {
+        if (!(key in data)) return undefined
+        const raw = data[key]
+        if (raw === '' || raw === null || raw === undefined) return undefined
+        const n = Number(raw)
+        return Number.isFinite(n) ? n : undefined
+    }
+
+    const delivery_fee_mwk = parseNumberIfPresent('delivery_fee_mwk')
+    const usd_to_mwk = parseNumberIfPresent('usd_to_mwk')
+    const gbp_to_mwk = parseNumberIfPresent('gbp_to_mwk')
+    const eur_to_mwk = parseNumberIfPresent('eur_to_mwk')
+    const cny_to_mwk = parseNumberIfPresent('cny_to_mwk')
+
+    // read existing settings
+    const { data: existing, error: fetchError } = await supabase
+        .from('settings')
+        .select('*')
+        .limit(1)
+        .single()
+
+    if (fetchError && fetchError.code !== 'PGRST116') {
+        console.error('Error reading settings:', fetchError)
+    }
+
+    const payload = {
+        ...(delivery_fee_mwk !== undefined ? { delivery_fee_mwk } : {}),
+        ...(usd_to_mwk !== undefined ? { usd_to_mwk } : {}),
+        ...(gbp_to_mwk !== undefined ? { gbp_to_mwk } : {}),
+        ...(eur_to_mwk !== undefined ? { eur_to_mwk } : {}),
+        ...(cny_to_mwk !== undefined ? { cny_to_mwk } : {}),
+        updated_at: new Date().toISOString()
+    }
+
+    if (Object.keys(payload).length === 1) {
+        // only updated_at would be present -> nothing to do
+        return redirect('/admin/settings?updated=1')
+    }
+
+    if (existing && existing.id) {
+        const { error } = await supabase.from('settings').update(payload).eq('id', existing.id)
+        if (error) {
+            console.error('Failed to update delivery & rates:', error)
+            return redirect('/admin/settings?updated=0')
+        }
+    } else {
+        // insert a row containing only the provided fields (others stay null)
+        const insertRow = {
+            ...(delivery_fee_mwk !== undefined ? { delivery_fee_mwk } : {}),
+            ...(usd_to_mwk !== undefined ? { usd_to_mwk } : {}),
+            ...(gbp_to_mwk !== undefined ? { gbp_to_mwk } : {}),
+            ...(eur_to_mwk !== undefined ? { eur_to_mwk } : {}),
+            ...(cny_to_mwk !== undefined ? { cny_to_mwk } : {}),
+            updated_at: new Date().toISOString()
+        }
+        const { error } = await supabase.from('settings').insert(insertRow)
+        if (error) {
+            console.error('Failed to create settings row (delivery):', error)
+            return redirect('/admin/settings?updated=0')
+        }
+    }
+
+    return redirect('/admin/settings?updated=1')
+}
+
+export default async function SettingsPage({ searchParams }) {
+    // fetch settings (server-side)
+    const { data: settings, error } = await supabase
+        .from('settings')
+        .select('*')
+        .limit(1)
+        .single()
+
+    // handle missing row gracefully by using defaults
+    const s = settings || {
+        business_name: 'Santone Enterprises',
+        business_phone: '+265 997 047 607',
+        delivery_fee_mwk: 25000,
+        usd_to_mwk: 1250,
+        gbp_to_mwk: 1350,
+        eur_to_mwk: 1500,
+        cny_to_mwk: 190
+    }
+
+    // unwrap searchParams (it may be a Promise)
+    const sp = await searchParams
+
+    const updated = String(sp?.updated || '') === '1'
+    const failed = String(sp?.updated || '') === '0'
+
+    return (
+        <div>
+            <h1 className="text-3xl font-bold mb-2">Settings</h1>
+            <p className="text-slate-500 mb-6">Edit business settings (live — saves to Supabase).</p>
+
+            {updated && (
+                <div className="mb-4 text-sm text-green-700 bg-green-50 border border-green-100 p-3 rounded">
+                    Settings updated successfully.
+                </div>
+            )}
+            {failed && (
+                <div className="mb-4 text-sm text-red-700 bg-red-50 border border-red-100 p-3 rounded">
+                    Failed to update settings. Check server logs.
+                </div>
+            )}
+
+            <div className="flex justify-end mb-4">
+                {/* Save All button (client component) */}
+                <SaveAllButton />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Business info card */}
+                <div className="bg-white p-6 rounded shadow">
+                    <h2 className="text-xl font-semibold mb-4">Business Information</h2>
+
+                    <form action={updateBusinessInfo} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-700 mb-1">Business name</label>
+                            <input
+                                id="business_name"
+                                name="business_name"
+                                defaultValue={s.business_name || ''}
+                                className="w-full border rounded px-3 py-2"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-sm text-slate-700 mb-1">Business phone</label>
+                            <input
+                                id="business_phone"
+                                name="business_phone"
+                                defaultValue={s.business_phone || ''}
+                                className="w-full border rounded px-3 py-2"
+                            />
+                        </div>
+
+                        <div className="pt-4">
+                            <button
+                                type="submit"
+                                className="bg-green-700 text-white px-4 py-2 rounded hover:bg-green-800"
+                            >
+                                Save business info
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                {/* Delivery & currency */}
+                <div className="bg-white p-6 rounded shadow">
+                    <h2 className="text-xl font-semibold mb-4">Delivery & Currency</h2>
+
+                    <form action={updateDeliveryRates} className="space-y-4">
+                        <div>
+                            <label className="block text-sm text-slate-700 mb-1">Delivery fee (MWK)</label>
+                            <input
+                                id="delivery_fee_mwk"
+                                name="delivery_fee_mwk"
+                                type="number"
+                                defaultValue={s.delivery_fee_mwk ?? 25000}
+                                className="w-full border rounded px-3 py-2"
+                            />
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 mt-2">
+                            <div className="bg-slate-50 p-3 rounded">
+                                <label className="block text-xs text-slate-500">USD → MWK</label>
+                                <input
+                                    id="usd_to_mwk"
+                                    name="usd_to_mwk"
+                                    type="number"
+                                    defaultValue={s.usd_to_mwk ?? 1250}
+                                    className="w-full border rounded px-2 py-1 mt-2"
+                                />
+                            </div>
+
+                            <div className="bg-slate-50 p-3 rounded">
+                                <label className="block text-xs text-slate-500">GBP → MWK</label>
+                                <input
+                                    id="gbp_to_mwk"
+                                    name="gbp_to_mwk"
+                                    type="number"
+                                    defaultValue={s.gbp_to_mwk ?? 1350}
+                                    className="w-full border rounded px-2 py-1 mt-2"
+                                />
+                            </div>
+
+                            <div className="bg-slate-50 p-3 rounded">
+                                <label className="block text-xs text-slate-500">EUR → MWK</label>
+                                <input
+                                    id="eur_to_mwk"
+                                    name="eur_to_mwk"
+                                    type="number"
+                                    defaultValue={s.eur_to_mwk ?? 1500}
+                                    className="w-full border rounded px-2 py-1 mt-2"
+                                />
+                            </div>
+
+                            <div className="bg-slate-50 p-3 rounded">
+                                <label className="block text-xs text-slate-500">CNY → MWK</label>
+                                <input
+                                    id="cny_to_mwk"
+                                    name="cny_to_mwk"
+                                    type="number"
+                                    defaultValue={s.cny_to_mwk ?? 190}
+                                    className="w-full border rounded px-2 py-1 mt-2"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="pt-4">
+                            <button
+                                type="submit"
+                                className="bg-green-700 text-white px-4 py-2 rounded hover:bg-green-800"
+                            >
+                                Save delivery & rates
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <p className="text-slate-500 mt-6 text-sm">
+                Tip: This page saves immediately when you press Save. If you want per-field save buttons we can split forms.
+            </p>
+        </div>
+    )
+}
